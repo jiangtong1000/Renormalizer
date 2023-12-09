@@ -10,7 +10,7 @@ from renormalizer.model.basis import BasisHalfSpin
 
 logger = logging.getLogger(__name__)
 
-def read_fcidump(fname, norb):
+def read_fcidump(fname, norb, aabb=False):
     """
     from fcidump format electron integral to h_pq g_pqrs in arXiv:2006.02056 eq 18
     norb: number of spatial orbitals
@@ -39,31 +39,50 @@ def read_fcidump(fname, norb):
             else:
                 nuc = integral
 
-    sh, aseri = int_to_h(h, eri)
+    sh, aseri = int_to_h(h, eri, aabb)
 
     logger.info(f"nuclear repulsion: {nuc}")
 
     return sh, aseri, nuc
 
 
-def int_to_h(h, eri):
+def int_to_h(h, eri, aabb=False):
     nsorb = len(h) * 2
+    norb = len(h)
     seri = np.zeros((nsorb, nsorb, nsorb, nsorb))
     sh = np.zeros((nsorb, nsorb))
-    for p, q, r, s in itertools.product(range(nsorb), repeat=4):
-        # a_p^\dagger a_q^\dagger a_r a_s
-        if p % 2 == s % 2 and q % 2 == r % 2:
-            seri[p, q, r, s] = eri[p // 2, s // 2, q // 2, r // 2]
+    
+    if aabb:
+        for p, q, r, s in itertools.product(range(nsorb), repeat=4):
+            # a_p^\dagger a_q^\dagger a_r a_s
+            if p % 2 == s % 2 and q % 2 == r % 2:
+                seri[p, q, r, s] = eri[p % (norb), s % norb, q % norb, r % norb]
 
-    for q, s in itertools.product(range(nsorb), repeat=2):
-        if q % 2 == s % 2:
-            sh[q, s] = h[q // 2, s // 2]
+        for q, s in itertools.product(range(nsorb), repeat=2):
+            if q % 2 == s % 2:
+                sh[q, s] = h[q % norb, s % norb]
 
-    aseri = np.zeros((nsorb, nsorb, nsorb, nsorb))
-    for q, s in itertools.product(range(nsorb), repeat=2):
-        for p, r in itertools.product(range(q), range(s)):
-            # aseri[p,q,r,s] = seri[p,q,r,s] - seri[q,p,r,s]
-            aseri[p, q, r, s] = seri[p, q, r, s] - seri[p, q, s, r]
+        aseri = np.zeros((nsorb, nsorb, nsorb, nsorb))
+        for q, s in itertools.product(range(nsorb), repeat=2):
+            for p, r in itertools.product(range(q), range(s)):
+                # aseri[p,q,r,s] = seri[p,q,r,s] - seri[q,p,r,s]
+                aseri[p, q, r, s] = seri[p, q, r, s] - seri[p, q, s, r]
+
+    else:
+        for p, q, r, s in itertools.product(range(nsorb), repeat=4):
+            # a_p^\dagger a_q^\dagger a_r a_s
+            if p % 2 == s % 2 and q % 2 == r % 2:
+                seri[p, q, r, s] = eri[p // 2, s // 2, q // 2, r // 2]
+
+        for q, s in itertools.product(range(nsorb), repeat=2):
+            if q % 2 == s % 2:
+                sh[q, s] = h[q // 2, s // 2]
+
+        aseri = np.zeros((nsorb, nsorb, nsorb, nsorb))
+        for q, s in itertools.product(range(nsorb), repeat=2):
+            for p, r in itertools.product(range(q), range(s)):
+                # aseri[p,q,r,s] = seri[p,q,r,s] - seri[q,p,r,s]
+                aseri[p, q, r, s] = seri[p, q, r, s] - seri[p, q, s, r]
 
     return sh, aseri
 
@@ -138,15 +157,19 @@ def qc_model(h1e, h2e, conserve_qn=True):
         return Op.product(new_ops)
 
     # 1-e terms
-    for p, q in itertools.product(range(norbs), repeat=2):
+    # for p, q in itertools.product(range(norbs), repeat=2):
+    pairs = np.argwhere(h1e!=0)
+    for p, q in pairs:
         op = process_op(a_dag_ops[p] * a_ops[q])
         ham_terms.append(op * h1e[p, q])
 
     # 2-e terms.
-    for q,s in itertools.product(range(norbs),repeat = 2):
-        for p,r in itertools.product(range(q),range(s)):
-            op = process_op(Op.product([a_dag_ops[p], a_dag_ops[q], a_ops[r], a_ops[s]]))
-            ham_terms.append(op * h2e[p, q, r, s])
+    # for q,s in itertools.product(range(norbs),repeat = 2):
+        # for p,r in itertools.product(range(q),range(s)):
+    pairs = np.argwhere(h2e!=0)
+    for p, q, r, s in pairs:
+        op = process_op(Op.product([a_dag_ops[p], a_dag_ops[q], a_ops[r], a_ops[s]]))
+        ham_terms.append(op * h2e[p, q, r, s])
 
     if conserve_qn:
         sigmaqn = [0,1]
